@@ -1,0 +1,75 @@
+name: Publications Crawler
+
+on:
+  push:
+    branches: [master, main]
+  schedule:
+    # Run every Sunday at 2:00 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  crawl-publications:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create necessary directories
+        run: |
+          mkdir -p logs data
+
+      - name: Run crawler
+        run: |
+          python main.py
+
+      - name: Check if data was generated
+        id: check-data
+        run: |
+          if [ -f "data/publications.csv" ]; then
+            echo "data_exists=true" >> $GITHUB_OUTPUT
+            echo "Data file exists"
+          else
+            echo "data_exists=false" >> $GITHUB_OUTPUT
+            echo "No data file found"
+          fi
+
+      - name: Commit and push results
+        if: steps.check-data.outputs.data_exists == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/publications.csv
+          git add logs/crawler.log
+          git commit -m "Update publications data - $(date +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git push
+
+      - name: Create summary
+        run: |
+          echo "## Crawling Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "data/publications.csv" ]; then
+            echo "✅ Publications data updated successfully" >> $GITHUB_STEP_SUMMARY
+            echo "- Data file: data/publications.csv" >> $GITHUB_STEP_SUMMARY
+            echo "- Log file: logs/crawler.log" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No publications data was generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run completed at:** $(date)" >> $GITHUB_STEP_SUMMARY
