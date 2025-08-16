@@ -29,9 +29,6 @@ crawler/
 │   └── weekly-crawler.yml  # GitHub Actions workflow
 ├── requirements.txt        # Python dependencies
 ├── main.py                 # Entry point
-├── test_setup.py           # Setup verification
-├── test_api_local.py       # Local API testing with mock server
-├── test_api_simple.py      # Simple API testing
 └── README.md              # This file
 ```
 
@@ -60,11 +57,10 @@ crawler/
 4. **Configure environment variables** (for local development only):
 
    ```bash
-   # Copy the example environment file
-   cp env.example .env
-
-   # Edit the .env file with your API endpoint for local testing
-   # API_ENDPOINT=https://your-api.com/api/publications
+   # Set environment variables for local testing
+   export API_ENDPOINT=https://your-api.com/api/publications
+   export API_TIMEOUT=30
+   export API_RETRIES=3
    ```
 
 5. **Create necessary directories**
@@ -73,16 +69,10 @@ crawler/
    mkdir -p logs
    ```
 
-6. **Test the setup**
+6. **Run the crawler**
 
    ```bash
-   python test_setup.py
-   ```
-
-7. **Test API functionality (optional)**
-
-   ```bash
-   python test_api_simple.py
+   python main.py
    ```
 
 ## Usage
@@ -193,10 +183,20 @@ The crawler automatically runs via GitHub Actions in two scenarios:
 **Required**: The crawler uses GitHub secrets to retrieve the API endpoint URL. You must set up the following secrets in your repository:
 
 1. Go to your repository → Settings → Secrets and variables → Actions
-2. Add the following secrets:
-   - `API_ENDPOINT`: Your API endpoint URL (e.g., `https://your-api.com/api/publications`) - **REQUIRED**
-   - `API_TIMEOUT`: Request timeout in seconds (optional, default: 30)
-   - `API_RETRIES`: Number of retry attempts (optional, default: 3)
+2. Click "New repository secret"
+3. Add the following secrets:
+
+   - **Name**: `API_ENDPOINT`
+   - **Value**: Your API endpoint URL (e.g., `https://your-api.com/api/publications`)
+   - **Required**: ✅ Yes
+
+   - **Name**: `API_TIMEOUT`
+   - **Value**: Request timeout in seconds (e.g., `30`)
+   - **Required**: ❌ No (default: 30)
+
+   - **Name**: `API_RETRIES`
+   - **Value**: Number of retry attempts (e.g., `3`)
+   - **Required**: ❌ No (default: 3)
 
 Example:
 
@@ -206,7 +206,20 @@ API_TIMEOUT=60
 API_RETRIES=5
 ```
 
-**Note**: You can test your secrets configuration by running the "Test GitHub Secrets" workflow manually from the Actions tab.
+**Note**: Make sure to set up your GitHub secrets before running the workflow.
+
+### Troubleshooting
+
+#### **API_ENDPOINT shows as empty:**
+
+- ✅ **Check**: Go to repository → Settings → Secrets and variables → Actions
+- ✅ **Verify**: `API_ENDPOINT` secret exists and has a value
+- ✅ **Format**: Ensure the URL is complete (e.g., `https://your-api.com/api/publications`)
+
+#### **Workflow fails with "API_ENDPOINT secret is not set":**
+
+- ✅ **Solution**: Add the `API_ENDPOINT` secret in repository settings
+- ✅ **Value**: Use your complete API endpoint URL
 
 The workflow will:
 

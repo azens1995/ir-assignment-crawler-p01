@@ -33,13 +33,19 @@ jobs:
 
       - name: Set API environment variables from secrets
         run: |
+          if [ -z "${{ secrets.API_ENDPOINT }}" ]; then
+            echo "❌ Error: API_ENDPOINT secret is not set!"
+            echo "Please set the API_ENDPOINT secret in your repository settings."
+            exit 1
+          fi
+
           echo "API_ENDPOINT=${{ secrets.API_ENDPOINT }}" >> $GITHUB_ENV
           echo "API_TIMEOUT=${{ secrets.API_TIMEOUT || '30' }}" >> $GITHUB_ENV
           echo "API_RETRIES=${{ secrets.API_RETRIES || '3' }}" >> $GITHUB_ENV
-        env:
-          API_ENDPOINT: ${{ secrets.API_ENDPOINT }}
-          API_TIMEOUT: ${{ secrets.API_TIMEOUT || '30' }}
-          API_RETRIES: ${{ secrets.API_RETRIES || '3' }}
+
+          echo "✅ API_ENDPOINT set: ${{ secrets.API_ENDPOINT }}"
+          echo "✅ API_TIMEOUT set: ${{ secrets.API_TIMEOUT || '30' }}"
+          echo "✅ API_RETRIES set: ${{ secrets.API_RETRIES || '3' }}"
 
       - name: Create necessary directories
         run: |
