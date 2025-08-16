@@ -161,10 +161,25 @@ class PublicationParser:
                 if match:
                     year = match.group(1)
             
+            # Validate year before creating publication data
+            if not year or not year.isdigit():
+                logger.warning(f"Publication missing valid year: '{year}', skipping")
+                return None
+            
+            year_int = int(year)
+            if year_int < 1900 or year_int > 2030:
+                logger.warning(f"Publication year {year_int} out of valid range (1900-2030), skipping")
+                return None
+            
+            # Validate publication link
+            if not publication_link or not publication_link.startswith('http'):
+                logger.warning(f"Publication missing valid publication_link: '{publication_link}', skipping")
+                return None
+            
             # Create publication data dictionary
             publication_data = {
                 "title": title,
-                "year": year,
+                "year": year_int,
                 "authors": format_authors(authors),
                 "publication_link": publication_link,
                 "author_links": format_author_links(author_links),

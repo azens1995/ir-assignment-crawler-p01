@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.crawler import CoventryPublicationsCrawler
 from src.utils import setup_logging
-from config.settings import LOG_FILE, OUTPUT_FILE
+from config.settings import LOG_FILE, API_ENDPOINT
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
         crawler.run()
         
         print(f"\nCrawling completed successfully!")
-        print(f"Results saved to: {OUTPUT_FILE}")
+        print(f"Results sent to API: {API_ENDPOINT}")
         print(f"Logs saved to: {LOG_FILE}")
         
     except KeyboardInterrupt:

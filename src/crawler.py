@@ -15,11 +15,11 @@ from webdriver_manager.chrome import ChromeDriverManager
 from loguru import logger
 
 from src.parser import PublicationParser
-from src.utils import delay, save_to_csv, create_backup_file, get_crawling_statistics
+from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics
 from config.settings import (
     SEED_URL, DELAY_BETWEEN_PAGES, DELAY_BETWEEN_REQUESTS, 
     MAX_RETRIES, TIMEOUT, USER_AGENT, HEADLESS, WINDOW_SIZE,
-    OUTPUT_FILE, MAX_CONSECUTIVE_ERRORS, ERROR_DELAY
+    MAX_CONSECUTIVE_ERRORS, ERROR_DELAY
 )
 
 
@@ -270,6 +270,12 @@ class CoventryPublicationsCrawler:
                     publications = self.extract_publications_from_page(current_url)
                     self.all_publications.extend(publications)
                     
+                    # Send publications to API
+                    if publications:
+                        api_success = send_to_api(publications)
+                        if not api_success:
+                            logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
+                    
                     # Get next page URL
                     current_url = self.get_next_page_url()
                     self.current_page += 1
@@ -300,14 +306,8 @@ class CoventryPublicationsCrawler:
             raise
     
     def save_results(self):
-        """Save extracted publications to CSV file."""
+        """Generate and log crawling statistics."""
         try:
-            # Create backup of existing file
-            create_backup_file(OUTPUT_FILE)
-            
-            # Save new data
-            save_to_csv(self.all_publications, OUTPUT_FILE)
-            
             # Generate and log statistics
             stats = get_crawling_statistics(self.all_publications)
             logger.info("Crawling Statistics:")
@@ -317,7 +317,7 @@ class CoventryPublicationsCrawler:
             logger.info(f"  Pages Crawled: {stats['pages_crawled']}")
             
         except Exception as e:
-            logger.error(f"Error saving results: {e}")
+            logger.error(f"Error generating statistics: {e}")
             raise
     
     def run(self):

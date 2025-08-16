@@ -6,10 +6,11 @@ A specialized web crawler for extracting research publications from Coventry Uni
 
 - Crawls all publication pages from the Pure Portal
 - Extracts publication details: title, year, authors, and links
+- Sends data to API endpoint after each page crawl
 - Polite crawling with configurable delays to avoid 403 errors
 - Comprehensive logging system
 - Selenium-based crawling for dynamic content
-- Export results to CSV format
+- API integration with retry mechanism
 
 ## Project Structure
 
@@ -29,6 +30,8 @@ crawler/
 ├── requirements.txt        # Python dependencies
 ├── main.py                 # Entry point
 ├── test_setup.py           # Setup verification
+├── test_api_local.py       # Local API testing with mock server
+├── test_api_simple.py      # Simple API testing
 └── README.md              # This file
 ```
 
@@ -54,16 +57,32 @@ crawler/
    pip install -r requirements.txt
    ```
 
-4. **Create necessary directories**
+4. **Configure environment variables** (for local development only):
 
    ```bash
-   mkdir -p logs data
+   # Copy the example environment file
+   cp env.example .env
+
+   # Edit the .env file with your API endpoint for local testing
+   # API_ENDPOINT=https://your-api.com/api/publications
    ```
 
-5. **Test the setup**
+5. **Create necessary directories**
+
+   ```bash
+   mkdir -p logs
+   ```
+
+6. **Test the setup**
 
    ```bash
    python test_setup.py
+   ```
+
+7. **Test API functionality (optional)**
+
+   ```bash
+   python test_api_simple.py
    ```
 
 ## Usage
@@ -79,7 +98,7 @@ The crawler will:
 - Start from the seed URL
 - Crawl all available pages
 - Extract publication information
-- Save results to `data/publications.csv`
+- Send data to API endpoint after each page
 - Log all activities to `logs/crawler.log`
 
 ## Configuration
@@ -91,16 +110,36 @@ Edit `config/settings.py` to modify:
 - Output file paths
 - Logging levels
 
-## Output Format
+## API Integration
 
-The crawler generates a CSV file with the following columns:
+The crawler sends data to the API endpoint after each page crawl. The payload structure is:
 
-- `title`: Publication title
-- `year`: Publication year
-- `authors`: Author names (comma-separated)
-- `publication_link`: Link to publication page
-- `author_links`: Links to author profiles (comma-separated)
-- `page_number`: Source page number
+```json
+{
+  "publications": [
+    {
+      "title": "Publication Title",
+      "year": 2024,
+      "authors": "Author Name",
+      "publication_link": "https://example.com/publication",
+      "author_links": "https://example.com/author",
+      "page_number": 0
+    }
+  ]
+}
+```
+
+### API Configuration
+
+- **Endpoint**: Retrieved from GitHub secrets (required)
+- **Method**: POST
+- **Content-Type**: application/json
+- **Retry Mechanism**: 3 attempts with 5-second delays (configurable)
+- **Timeout**: 30 seconds (configurable)
+- **GitHub Secrets**:
+  - `API_ENDPOINT`: The API endpoint URL (required)
+  - `API_TIMEOUT`: Request timeout in seconds (optional, default: 30)
+  - `API_RETRIES`: Number of retry attempts (optional, default: 3)
 
 ## Logging
 
@@ -148,6 +187,26 @@ The crawler automatically runs via GitHub Actions in two scenarios:
 
 1. **On Push to Master**: Triggers when code is pushed to the master/main branch
 2. **Weekly Schedule**: Runs every Sunday at 2:00 AM UTC
+
+### GitHub Secrets Setup
+
+**Required**: The crawler uses GitHub secrets to retrieve the API endpoint URL. You must set up the following secrets in your repository:
+
+1. Go to your repository → Settings → Secrets and variables → Actions
+2. Add the following secrets:
+   - `API_ENDPOINT`: Your API endpoint URL (e.g., `https://your-api.com/api/publications`) - **REQUIRED**
+   - `API_TIMEOUT`: Request timeout in seconds (optional, default: 30)
+   - `API_RETRIES`: Number of retry attempts (optional, default: 3)
+
+Example:
+
+```
+API_ENDPOINT=https://your-production-api.com/api/publications
+API_TIMEOUT=60
+API_RETRIES=5
+```
+
+**Note**: You can test your secrets configuration by running the "Test GitHub Secrets" workflow manually from the Actions tab.
 
 The workflow will:
 

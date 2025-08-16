@@ -13,7 +13,7 @@ SEED_URL = "https://pureportal.coventry.ac.uk/en/organisations/fbl-school-of-eco
 BASE_URL = "https://pureportal.coventry.ac.uk"
 
 # Crawling settings
-DELAY_BETWEEN_PAGES = 3  # seconds
+DELAY_BETWEEN_PAGES = 8  # seconds (increased by 5 seconds)
 DELAY_BETWEEN_REQUESTS = 1  # seconds
 MAX_RETRIES = 3
 TIMEOUT = 30  # seconds
@@ -25,7 +25,13 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 LOG_DIR = BASE_DIR / "logs"
 DATA_DIR = BASE_DIR / "data"
 LOG_FILE = LOG_DIR / "crawler.log"
-OUTPUT_FILE = DATA_DIR / "publications.csv"
+
+# API Configuration
+# For GitHub Actions, these will be set from secrets
+# For local development, use environment variables or .env file
+API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://localhost:8787/api/publications')
+API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # seconds
+API_RETRIES = int(os.getenv('API_RETRIES', '3'))
 
 # Ensure directories exist
 LOG_DIR.mkdir(exist_ok=True)

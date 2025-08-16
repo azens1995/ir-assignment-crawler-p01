@@ -4,12 +4,14 @@ Utility functions for the crawler.
 
 import csv
 import time
+import json
+import requests
 from pathlib import Path
 from typing import List, Dict, Any
 from loguru import logger
 import pandas as pd
 
-from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER
+from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_TIMEOUT, API_RETRIES
 
 
 def setup_logging():
@@ -41,8 +43,56 @@ def delay(seconds: float):
     time.sleep(seconds)
 
 
+def send_to_api(data: List[Dict[str, Any]]) -> bool:
+    """Send extracted data to API endpoint."""
+    if not data:
+        logger.warning("No data to send to API")
+        return False
+    
+    # Prepare payload
+    payload = {
+        "publications": data
+    }
+    
+
+    
+    for attempt in range(API_RETRIES):
+        try:
+            logger.info(f"Sending {len(data)} publications to API (attempt {attempt + 1}/{API_RETRIES})")
+            
+            response = requests.post(
+                API_ENDPOINT,
+                json=payload,
+                timeout=API_TIMEOUT,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Coventry-Crawler/1.0'
+                }
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully sent {len(data)} publications to API")
+                return True
+            else:
+                logger.warning(f"API returned status code {response.status_code}: {response.text}")
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"API request timeout on attempt {attempt + 1}")
+        except requests.exceptions.ConnectionError:
+            logger.error(f"API connection error on attempt {attempt + 1}")
+        except Exception as e:
+            logger.error(f"API request error on attempt {attempt + 1}: {e}")
+        
+        if attempt < API_RETRIES - 1:
+            logger.info(f"Retrying API call in 5 seconds...")
+            time.sleep(5)
+    
+    logger.error(f"Failed to send data to API after {API_RETRIES} attempts")
+    return False
+
+
 def save_to_csv(data: List[Dict[str, Any]], output_file: Path):
-    """Save extracted data to CSV file."""
+    """Save extracted data to CSV file (fallback method)."""
     if not data:
         logger.warning("No data to save")
         return
