@@ -27,11 +27,9 @@ DATA_DIR = BASE_DIR / "data"
 LOG_FILE = LOG_DIR / "crawler.log"
 
 # API Configuration
-# For GitHub Actions, these will be set from secrets
-# For local development, use environment variables or .env file
-API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://localhost:8787/api/publications')
-API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # seconds
-API_RETRIES = int(os.getenv('API_RETRIES', '3'))
+API_ENDPOINT = "https://api.irapi.workers.dev/api/publications"
+API_TIMEOUT = 30  # seconds
+API_RETRIES = 3
 
 # Ensure directories exist
 LOG_DIR.mkdir(exist_ok=True)

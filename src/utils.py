@@ -49,11 +49,7 @@ def send_to_api(data: List[Dict[str, Any]]) -> bool:
         logger.warning("No data to send to API")
         return False
     
-    # Validate API endpoint is set
-    if not API_ENDPOINT or API_ENDPOINT == "http://localhost:8787/api/publications":
-        logger.error("API_ENDPOINT is not properly configured!")
-        logger.error("Please set the API_ENDPOINT environment variable or GitHub secret.")
-        return False
+
     
     # Prepare payload
     payload = {

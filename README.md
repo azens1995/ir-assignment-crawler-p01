@@ -54,22 +54,13 @@ crawler/
    pip install -r requirements.txt
    ```
 
-4. **Configure environment variables** (for local development only):
-
-   ```bash
-   # Set environment variables for local testing
-   export API_ENDPOINT=https://your-api.com/api/publications
-   export API_TIMEOUT=30
-   export API_RETRIES=3
-   ```
-
-5. **Create necessary directories**
+4. **Create necessary directories**
 
    ```bash
    mkdir -p logs
    ```
 
-6. **Run the crawler**
+5. **Run the crawler**
 
    ```bash
    python main.py
@@ -121,15 +112,11 @@ The crawler sends data to the API endpoint after each page crawl. The payload st
 
 ### API Configuration
 
-- **Endpoint**: Retrieved from GitHub secrets (required)
+- **Endpoint**: `https://api.irapi.workers.dev/api/publications`
 - **Method**: POST
 - **Content-Type**: application/json
-- **Retry Mechanism**: 3 attempts with 5-second delays (configurable)
-- **Timeout**: 30 seconds (configurable)
-- **GitHub Secrets**:
-  - `API_ENDPOINT`: The API endpoint URL (required)
-  - `API_TIMEOUT`: Request timeout in seconds (optional, default: 30)
-  - `API_RETRIES`: Number of retry attempts (optional, default: 3)
+- **Retry Mechanism**: 3 attempts with 5-second delays
+- **Timeout**: 30 seconds
 
 ## Logging
 
@@ -178,48 +165,13 @@ The crawler automatically runs via GitHub Actions in two scenarios:
 1. **On Push to Master**: Triggers when code is pushed to the master/main branch
 2. **Weekly Schedule**: Runs every Sunday at 2:00 AM UTC
 
-### GitHub Secrets Setup
-
-**Required**: The crawler uses GitHub secrets to retrieve the API endpoint URL. You must set up the following secrets in your repository:
-
-1. Go to your repository → Settings → Secrets and variables → Actions
-2. Click "New repository secret"
-3. Add the following secrets:
-
-   - **Name**: `API_ENDPOINT`
-   - **Value**: Your API endpoint URL (e.g., `https://your-api.com/api/publications`)
-   - **Required**: ✅ Yes
-
-   - **Name**: `API_TIMEOUT`
-   - **Value**: Request timeout in seconds (e.g., `30`)
-   - **Required**: ❌ No (default: 30)
-
-   - **Name**: `API_RETRIES`
-   - **Value**: Number of retry attempts (e.g., `3`)
-   - **Required**: ❌ No (default: 3)
-
-Example:
-
-```
-API_ENDPOINT=https://your-production-api.com/api/publications
-API_TIMEOUT=60
-API_RETRIES=5
-```
-
-**Note**: Make sure to set up your GitHub secrets before running the workflow.
-
 ### Troubleshooting
 
-#### **API_ENDPOINT shows as empty:**
+#### **API Connection Issues:**
 
-- ✅ **Check**: Go to repository → Settings → Secrets and variables → Actions
-- ✅ **Verify**: `API_ENDPOINT` secret exists and has a value
-- ✅ **Format**: Ensure the URL is complete (e.g., `https://your-api.com/api/publications`)
-
-#### **Workflow fails with "API_ENDPOINT secret is not set":**
-
-- ✅ **Solution**: Add the `API_ENDPOINT` secret in repository settings
-- ✅ **Value**: Use your complete API endpoint URL
+- ✅ **Check**: Verify the API endpoint is accessible
+- ✅ **Test**: The endpoint should return a valid JSON response
+- ✅ **Format**: Ensure proper network connectivity
 
 The workflow will:
 
