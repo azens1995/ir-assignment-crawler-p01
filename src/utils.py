@@ -2,14 +2,13 @@
 Utility functions for the crawler.
 """
 
-import csv
 import time
-import json
 import requests
 from pathlib import Path
 from typing import List, Dict, Any
 from loguru import logger
 import pandas as pd
+import sys
 
 from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_TIMEOUT, API_RETRIES
 
@@ -30,11 +29,15 @@ def setup_logging():
     )
     
     # Add console handler
-    logger.add(
-        lambda msg: print(msg, end=""),
-        format=LOG_FORMAT,
-        level=LOG_LEVEL
-    )
+    def _safe_print(message):
+        try:
+            print(message, end="")
+        except BrokenPipeError:
+            try:
+                sys.stdout.close()
+            except Exception:
+                pass
+    logger.add(_safe_print, format=LOG_FORMAT, level=LOG_LEVEL)
 
 
 def delay(seconds: float):
@@ -44,23 +47,29 @@ def delay(seconds: float):
 
 
 def send_to_api(data: List[Dict[str, Any]]) -> bool:
-    """Send extracted data to API endpoint."""
+    """Send extracted data to API endpoint (excluding page_number field)."""
     if not data:
         logger.warning("No data to send to API")
         return False
     
-
+    # Exclude page_number from each publication for API submission
+    publications = []
+    for item in data:
+        try:
+            filtered = {k: v for k, v in item.items() if k != "page_number"}
+            publications.append(filtered)
+        except Exception:
+            # If unexpected structure, skip filtering for this item
+            publications.append(item)
     
     # Prepare payload
     payload = {
-        "publications": data
+        "publications": publications
     }
-    
-
     
     for attempt in range(API_RETRIES):
         try:
-            logger.info(f"Sending {len(data)} publications to API (attempt {attempt + 1}/{API_RETRIES})")
+            logger.info(f"Sending {len(publications)} publications to API (attempt {attempt + 1}/{API_RETRIES})")
             
             response = requests.post(
                 API_ENDPOINT,
@@ -73,7 +82,7 @@ def send_to_api(data: List[Dict[str, Any]]) -> bool:
             )
             
             if response.status_code == 200:
-                logger.info(f"Successfully sent {len(data)} publications to API")
+                logger.info(f"Successfully sent {len(publications)} publications to API")
                 return True
             else:
                 logger.warning(f"API returned status code {response.status_code}: {response.text}")
@@ -224,3 +233,63 @@ def get_crawling_statistics(data: List[Dict[str, Any]]) -> Dict[str, Any]:
         "year_range": year_range,
         "pages_crawled": pages_crawled
     }
+
+# robots.txt utilities
+from urllib import robotparser
+from config.settings import RESPECT_ROBOTS, ROBOTS_URL, ROBOTS_USER_AGENT, ROBOTS_FALLBACK_CRAWL_DELAY
+
+
+def fetch_text_via_selenium(driver, url: str) -> str:
+    """Fetch page content using an existing Selenium driver."""
+    try:
+        driver.get(url)
+        # small wait
+        time.sleep(1.5)
+        return driver.page_source
+    except Exception as e:
+        logger.debug(f"Selenium fetch failed for {url}: {e}")
+        return ""
+
+
+class RobotsPolicy:
+    """Fetch and evaluate robots.txt rules for a site."""
+    def __init__(self, robots_url: str, user_agent: str):
+        self.robots_url = robots_url
+        self.user_agent = user_agent
+        self.parser = robotparser.RobotFileParser()
+        self._crawl_delay = None
+        self._fetched = False
+        self._unavailable = False
+    
+    def fetch(self):
+        """Mark robots as needing Selenium-based fetch; no direct HTTP used."""
+        try:
+            # Do not perform HTTP requests here per requirement; let Selenium path load it
+            self._fetched = True
+            self._unavailable = True
+            logger.info("robots.txt will be fetched via Selenium fallback only")
+        except Exception as e:
+            logger.warning(f"Failed to initialize robots fetch state: {e}")
+            self._fetched = True
+            self._unavailable = True
+
+    def can_fetch(self, url: str) -> bool:
+        if not RESPECT_ROBOTS:
+            return True
+        if not self._fetched:
+            self.fetch()
+        if self._unavailable:
+            return True
+        try:
+            return self.parser.can_fetch(self.user_agent, url)
+        except Exception:
+            return True
+    
+    def crawl_delay_seconds(self) -> float:
+        if not RESPECT_ROBOTS:
+            return ROBOTS_FALLBACK_CRAWL_DELAY
+        if not self._fetched:
+            self.fetch()
+        if self._unavailable:
+            return float(ROBOTS_FALLBACK_CRAWL_DELAY)
+        return float(self._crawl_delay) if self._crawl_delay is not None else float(ROBOTS_FALLBACK_CRAWL_DELAY)

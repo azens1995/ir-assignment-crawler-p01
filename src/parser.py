@@ -292,6 +292,9 @@ class PublicationParser:
                         next_url = link.get('href', '')
                         if next_url and not next_url.startswith('http'):
                             next_url = BASE_URL + next_url
+                        if not validate_url(next_url):
+                            logger.warning(f"Ignoring invalid next link: {next_url}")
+                            return None
                         logger.info(f"Found next page link: {next_url}")
                         return next_url
         
@@ -306,6 +309,9 @@ class PublicationParser:
         
         # Construct next page URL
         next_url = current_url.replace(f'page={current_page}', f'page={next_page}')
+        if not validate_url(next_url):
+            logger.warning(f"Constructed invalid next URL: {next_url}")
+            return None
         logger.info(f"Constructed next page URL: {next_url}")
         return next_url
     

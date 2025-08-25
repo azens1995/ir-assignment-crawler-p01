@@ -15,23 +15,37 @@ from webdriver_manager.chrome import ChromeDriverManager
 from loguru import logger
 
 from src.parser import PublicationParser
-from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics
+from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics, save_to_csv, fetch_text_via_selenium
 from config.settings import (
     SEED_URL, DELAY_BETWEEN_PAGES, DELAY_BETWEEN_REQUESTS, 
     MAX_RETRIES, TIMEOUT, USER_AGENT, HEADLESS, WINDOW_SIZE,
-    MAX_CONSECUTIVE_ERRORS, ERROR_DELAY
+    MAX_CONSECUTIVE_ERRORS, ERROR_DELAY, DATA_DIR, PARALLEL_PARSE, PARSE_WORKERS
 )
+
+# robots
+from src.utils import RobotsPolicy
+from config.settings import RESPECT_ROBOTS, ROBOTS_USER_AGENT, ROBOTS_URL
+
+# typing for queues
+from queue import Queue
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time as _time
 
 
 class CoventryPublicationsCrawler:
     """Main crawler for Coventry University research publications."""
     
-    def __init__(self):
+    def __init__(self, save_csv: bool = False):
         self.driver = None
         self.parser = PublicationParser()
         self.all_publications: List[Dict[str, Any]] = []
         self.consecutive_errors = 0
         self.current_page = 0
+        # Dev-mode CSV saving flag
+        self.save_csv_flag = save_csv
+        # Always fetch robots.txt from the site's base URL
+        self.robots = RobotsPolicy(ROBOTS_URL, ROBOTS_USER_AGENT)
         
     def setup_driver(self):
         """Setup Chrome WebDriver with appropriate options."""
@@ -111,6 +125,27 @@ class CoventryPublicationsCrawler:
             except Exception as e:
                 logger.error(f"Error closing WebDriver: {e}")
     
+    def _respect_robots_or_skip(self, url: str) -> bool:
+        """Check robots rules for the URL; returns True if allowed, False otherwise."""
+        try:
+            if not RESPECT_ROBOTS:
+                return True
+            allowed = self.robots.can_fetch(url)
+            if not allowed:
+                logger.warning(f"Blocked by robots.txt: {url}")
+            return allowed
+        except Exception as e:
+            logger.warning(f"robots check failed for {url}: {e}")
+            return True
+    
+    def _delay_per_robots(self):
+        try:
+            delay_seconds = self.robots.crawl_delay_seconds()
+            logger.info(f"Respecting crawl-delay: {delay_seconds}s")
+            delay(delay_seconds)
+        except Exception:
+            delay(DELAY_BETWEEN_PAGES)
+    
     def navigate_to_page(self, url: str) -> bool:
         """
         Navigate to a specific URL with error handling and retries.
@@ -121,15 +156,23 @@ class CoventryPublicationsCrawler:
         Returns:
             True if navigation successful, False otherwise
         """
+        if self.driver is None:
+            logger.error("WebDriver not initialized")
+            return False
+        if not self._respect_robots_or_skip(url):
+            return False
         for attempt in range(MAX_RETRIES):
             try:
                 logger.info(f"Navigating to page {self.current_page + 1}: {url}")
+                _t0 = _time.perf_counter()
                 self.driver.get(url)
                 
                 # Wait for page to load
                 WebDriverWait(self.driver, TIMEOUT).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
+                _t1 = _time.perf_counter()
+                logger.info(f"Page load time: {(_t1 - _t0):.2f}s for {url}")
                 
                 # Additional delay to ensure page is fully loaded
                 delay(2)
@@ -176,13 +219,16 @@ class CoventryPublicationsCrawler:
         Returns:
             List of publication dictionaries
         """
+        if self.driver is None:
+            logger.error("WebDriver not initialized")
+            return []
         try:
             import threading
             import queue
             
             # Use a queue to get results from the parsing thread
-            result_queue = queue.Queue()
-            exception_queue = queue.Queue()
+            result_queue: Queue = queue.Queue()
+            exception_queue: Queue = queue.Queue()
             
             def parse_with_timeout():
                 try:
@@ -226,6 +272,9 @@ class CoventryPublicationsCrawler:
         Returns:
             Next page URL or None if no next page
         """
+        if self.driver is None:
+            logger.error("WebDriver not initialized")
+            return None
         try:
             page_source = self.driver.page_source
             current_url = self.driver.current_url
@@ -233,7 +282,12 @@ class CoventryPublicationsCrawler:
             
             if next_url:
                 logger.info(f"Next page URL found: {next_url}")
-                return next_url
+                # Check robots before returning
+                if self._respect_robots_or_skip(next_url):
+                    return next_url
+                else:
+                    logger.warning("Next page blocked by robots.txt; stopping crawl")
+                    return None
             else:
                 logger.info("No next page found - reached end of publications")
                 return None
@@ -241,6 +295,42 @@ class CoventryPublicationsCrawler:
         except Exception as e:
             logger.error(f"Error getting next page URL: {e}")
             return None
+
+    def _ensure_robots_loaded(self):
+        """Fetch robots.txt via Selenium, parse and log content."""
+        try:
+            if not RESPECT_ROBOTS:
+                return
+            if not self.driver:
+                return
+            if self.robots._fetched and not self.robots._unavailable:
+                return
+            # Always fetch via Selenium per requirement (once)
+            logger.info("Fetching robots.txt via Selenium")
+            content = fetch_text_via_selenium(self.driver, ROBOTS_URL)
+            if not content:
+                logger.warning("robots.txt content empty via Selenium; using fallback delay")
+                self.robots._fetched = True
+                self.robots._unavailable = True
+                return
+            # Strip HTML if any and parse
+            import re
+            text = re.sub(r'<[^>]+>', '\n', content)
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            from urllib import robotparser
+            self.robots.parser = robotparser.RobotFileParser()
+            self.robots.parser.parse(lines)
+            self.robots.parser.set_url(ROBOTS_URL)
+            self.robots._crawl_delay = self.robots.parser.crawl_delay(ROBOTS_USER_AGENT) or self.robots.parser.crawl_delay("*")
+            self.robots._fetched = True
+            self.robots._unavailable = False
+            # Log robots content (truncated)
+            snippet = text if len(text) <= 2000 else text[:2000] + "\n... (truncated)"
+            logger.info(f"robots.txt content (via Selenium):\n{snippet}")
+        except Exception as e:
+            logger.warning(f"Failed to load robots.txt via Selenium: {e}")
+            self.robots._fetched = True
+            self.robots._unavailable = True
     
     def crawl_all_pages(self):
         """Crawl all publication pages starting from the seed URL."""
@@ -249,9 +339,21 @@ class CoventryPublicationsCrawler:
             
             # Start with seed URL
             current_url = SEED_URL
+            # One-time robots fetch
+            self._ensure_robots_loaded()
             
             while current_url:
                 try:
+                    # Respect robots crawl-delay between page visits
+                    self._delay_per_robots()
+                    
+                    # Respect robots disallow for this URL
+                    if not self._respect_robots_or_skip(current_url):
+                        logger.warning(f"Skipping disallowed URL by robots: {current_url}")
+                        current_url = self.get_next_page_url()
+                        self.current_page += 1
+                        continue
+                    
                     # Navigate to current page
                     if not self.navigate_to_page(current_url):
                         self.consecutive_errors += 1
@@ -268,22 +370,30 @@ class CoventryPublicationsCrawler:
                     
                     # Extract publications from current page
                     publications = self.extract_publications_from_page(current_url)
+                    # Optional: parallel post-processing of publication records (no extra network)
+                    if PARALLEL_PARSE and publications:
+                        def _identity(pub):
+                            return pub
+                        try:
+                            with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as executor:
+                                futures = [executor.submit(_identity, pub) for pub in publications]
+                                publications = [f.result() for f in as_completed(futures)]
+                        except Exception as e:
+                            logger.debug(f"Parallel parse post-process failed, continuing sequentially: {e}")
                     self.all_publications.extend(publications)
                     
                     # Send publications to API
                     if publications:
+                        _api_t0 = _time.perf_counter()
                         api_success = send_to_api(publications)
+                        _api_t1 = _time.perf_counter()
+                        logger.info(f"API post time: {(_api_t1 - _api_t0):.2f}s for {len(publications)} records")
                         if not api_success:
                             logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
                     
                     # Get next page URL
                     current_url = self.get_next_page_url()
                     self.current_page += 1
-                    
-                    # Polite delay between pages
-                    if current_url:
-                        logger.info(f"Waiting {DELAY_BETWEEN_PAGES} seconds before next page...")
-                        delay(DELAY_BETWEEN_PAGES)
                     
                 except Exception as e:
                     logger.error(f"Error processing page {self.current_page + 1}: {e}")
@@ -315,6 +425,13 @@ class CoventryPublicationsCrawler:
             logger.info(f"  Unique Authors: {stats['unique_authors']}")
             logger.info(f"  Year Range: {stats['year_range']}")
             logger.info(f"  Pages Crawled: {stats['pages_crawled']}")
+            
+            # Save to CSV in data directory only if dev flag is enabled
+            if self.save_csv_flag and self.all_publications:
+                output_file = Path(DATA_DIR) / "publications.csv"
+                create_backup_file(output_file)
+                save_to_csv(self.all_publications, output_file)
+                logger.info(f"CSV saved to: {output_file}")
             
         except Exception as e:
             logger.error(f"Error generating statistics: {e}")

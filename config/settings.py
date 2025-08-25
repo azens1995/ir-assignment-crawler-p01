@@ -65,3 +65,14 @@ LAST_PAGE_SELECTOR = "ul.pager li:last-child a"
 # Error handling
 MAX_CONSECUTIVE_ERRORS = 5
 ERROR_DELAY = 10  # seconds
+
+# Robots.txt compliance
+RESPECT_ROBOTS = True
+ROBOTS_URL = f"{BASE_URL}/robots.txt"
+ROBOTS_USER_AGENT = USER_AGENT
+# If robots.txt specifies crawl-delay, it will be used; otherwise fall back to this:
+ROBOTS_FALLBACK_CRAWL_DELAY = DELAY_BETWEEN_PAGES
+
+# Parsing parallelism
+PARALLEL_PARSE = True
+PARSE_WORKERS = 4
