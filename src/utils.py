@@ -144,21 +144,17 @@ def delay(seconds: float):
 
 
 def send_to_api(data: List[Dict[str, Any]]) -> bool:
-    """Send extracted data to API endpoint (excluding page_number field and existing publications)."""
+    """Send extracted data to API endpoint (excluding page_number field)."""
     if not data:
         logger.warning("No data to send to API")
         return False
     
-    # Filter out existing publications using the cache
-    filtered_data = filter_existing_publications(data)
-    
-    if not filtered_data:
-        logger.info("All publications already exist in database, skipping API call")
-        return True
+    # Note: Filtering for existing publications is now done in the crawler
+    # before calling this function, so we can directly process the data
     
     # Exclude page_number from each publication for API submission
     publications = []
-    for item in filtered_data:
+    for item in data:
         try:
             filtered = {k: v for k, v in item.items() if k != "page_number"}
             publications.append(filtered)

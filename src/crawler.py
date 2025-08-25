@@ -296,6 +296,197 @@ class CoventryPublicationsCrawler:
         except Exception as e:
             logger.error(f"Error getting next page URL: {e}")
             return None
+    
+    def process_publications_with_details(self, publications: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Process publications: check cache and crawl details for new ones.
+        
+        Args:
+            publications: List of basic publication data from listing page
+            
+        Returns:
+            List of processed publications (only new ones with enhanced details)
+        """
+        from src.utils import is_publication_exists
+        
+        process_start_time = _time.perf_counter()
+        logger.info(f"Processing {len(publications)} publications for detail crawling...")
+        
+        processed_publications = []
+        skipped_count = 0
+        detail_crawl_count = 0
+        total_detail_crawl_time = 0.0
+        
+        for i, publication in enumerate(publications):
+            title = publication.get('title', '')
+            publication_url = publication.get('publication_link', '')
+            
+            logger.debug(f"Processing publication {i+1}/{len(publications)}: {title[:50]}...")
+            
+            if not title:
+                logger.warning("Skipping publication with no title")
+                continue
+            
+            # Check if publication already exists
+            if is_publication_exists(title):
+                logger.info(f"Skipping existing publication: {title}")
+                skipped_count += 1
+                continue
+            
+            # Publication is new - crawl details
+            logger.info(f"NEW PUBLICATION FOUND: {title}")
+            if publication_url and publication_url.startswith('http'):
+                detail_start_time = _time.perf_counter()
+                enhanced_publication = self.crawl_publication_details(publication_url, publication)
+                detail_end_time = _time.perf_counter()
+                detail_crawl_time = detail_end_time - detail_start_time
+                total_detail_crawl_time += detail_crawl_time
+                detail_crawl_count += 1
+                
+                if enhanced_publication:
+                    processed_publications.append(enhanced_publication)
+                    logger.info(f"Successfully enhanced publication details in {detail_crawl_time:.2f}s: {title}")
+                else:
+                    # If detail crawling fails, use basic data
+                    logger.warning(f"Failed to crawl details for {title}, using basic data")
+                    processed_publications.append(publication)
+            else:
+                logger.warning(f"No valid URL for publication {title}, using basic data")
+                processed_publications.append(publication)
+        
+        process_end_time = _time.perf_counter()
+        total_process_time = process_end_time - process_start_time
+        
+        # Log comprehensive summary
+        logger.info("=" * 60)
+        logger.info("PUBLICATION PROCESSING SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Total publications processed: {len(publications)}")
+        logger.info(f"Existing publications skipped: {skipped_count}")
+        logger.info(f"New publications found: {len(processed_publications)}")
+        logger.info(f"Detail pages crawled: {detail_crawl_count}")
+        logger.info(f"Total processing time: {total_process_time:.2f}s")
+        if detail_crawl_count > 0:
+            logger.info(f"Total detail crawling time: {total_detail_crawl_time:.2f}s")
+            logger.info(f"Average detail crawling time: {total_detail_crawl_time/detail_crawl_count:.2f}s per publication")
+        logger.info("=" * 60)
+        
+        return processed_publications
+    
+    def crawl_publication_details(self, publication_url: str, basic_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Crawl a single publication's detail page to extract abstract and detailed authors.
+        
+        Args:
+            publication_url: URL of the publication detail page
+            basic_data: Basic publication data from listing page
+            
+        Returns:
+            Enhanced publication data or None if crawling fails
+        """
+        title = basic_data.get('title', 'Unknown')
+        crawl_start_time = _time.perf_counter()
+        
+        logger.info(f"Starting detail crawl for: {title}")
+        logger.info(f"Detail page URL: {publication_url}")
+        
+        if not publication_url or not publication_url.startswith('http'):
+            logger.warning(f"Invalid publication URL: {publication_url}")
+            return basic_data
+        
+        # Check robots.txt for this URL
+        robots_check_start = _time.perf_counter()
+        if not self._respect_robots_or_skip(publication_url):
+            logger.warning(f"Publication URL blocked by robots.txt: {publication_url}")
+            return basic_data
+        robots_check_end = _time.perf_counter()
+        logger.debug(f"Robots.txt check completed in {robots_check_end - robots_check_start:.3f}s")
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                logger.info(f"Detail crawl attempt {attempt + 1}/{MAX_RETRIES} for: {title}")
+                
+                # Add delay to respect robots.txt
+                delay_start = _time.perf_counter()
+                self._delay_per_robots()
+                delay_end = _time.perf_counter()
+                logger.debug(f"Robots crawl delay: {delay_end - delay_start:.2f}s")
+                
+                # Check if driver is available
+                if self.driver is None:
+                    logger.error("WebDriver not initialized for detail crawling")
+                    return basic_data
+                
+                # Navigate to publication detail page
+                logger.info(f"Navigating to detail page: {publication_url}")
+                nav_start = _time.perf_counter()
+                self.driver.get(publication_url)
+                
+                # Wait for page to load
+                logger.debug("Waiting for detail page to load...")
+                WebDriverWait(self.driver, TIMEOUT).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                nav_end = _time.perf_counter()
+                page_load_time = nav_end - nav_start
+                logger.info(f"Detail page loaded successfully in {page_load_time:.2f}s")
+                
+                # Additional delay to ensure page is fully loaded
+                logger.debug("Additional page stabilization delay...")
+                delay(1)
+                
+                # Get page source and parse details
+                logger.info("Extracting abstract and detailed authors...")
+                parse_start = _time.perf_counter()
+                page_source = self.driver.page_source
+                enhanced_data = self.parser.parse_publication_detail(page_source, publication_url, basic_data)
+                parse_end = _time.perf_counter()
+                parse_time = parse_end - parse_start
+                
+                # Log what was extracted
+                abstract = enhanced_data.get('abstract', '')
+                authors = enhanced_data.get('authors', '')
+                
+                logger.info(f"Detail parsing completed in {parse_time:.2f}s")
+                logger.info(f"Abstract extracted: {'Yes' if abstract else 'No'} ({len(abstract)} chars)")
+                logger.info(f"Authors extracted: {authors}")
+                
+                crawl_end_time = _time.perf_counter()
+                total_crawl_time = crawl_end_time - crawl_start_time
+                logger.info(f"Detail crawl completed successfully in {total_crawl_time:.2f}s total")
+                
+                return enhanced_data
+                
+            except TimeoutException:
+                logger.warning(f"Timeout on attempt {attempt + 1} for publication: {title}")
+                logger.warning(f"URL: {publication_url}")
+                if attempt < MAX_RETRIES - 1:
+                    logger.info(f"Retrying in {ERROR_DELAY} seconds...")
+                    delay(ERROR_DELAY)
+                    continue
+                else:
+                    logger.error(f"Failed to load publication page after {MAX_RETRIES} attempts: {title}")
+                    return basic_data
+                    
+            except WebDriverException as e:
+                logger.error(f"WebDriver error on attempt {attempt + 1} for {title}: {e}")
+                if attempt < MAX_RETRIES - 1:
+                    logger.info(f"Retrying in {ERROR_DELAY} seconds...")
+                    delay(ERROR_DELAY)
+                    continue
+                else:
+                    logger.error(f"WebDriver failed permanently for: {title}")
+                    return basic_data
+                    
+            except Exception as e:
+                logger.error(f"Unexpected error crawling details for {title}: {e}")
+                logger.error(f"URL: {publication_url}")
+                return basic_data
+        
+        crawl_end_time = _time.perf_counter()
+        total_crawl_time = crawl_end_time - crawl_start_time
+        logger.warning(f"Detail crawl failed after all attempts in {total_crawl_time:.2f}s: {title}")
+        return basic_data
 
     def _ensure_robots_loaded(self):
         """Fetch robots.txt via Selenium, parse and log content."""
@@ -371,26 +562,32 @@ class CoventryPublicationsCrawler:
                     
                     # Extract publications from current page
                     publications = self.extract_publications_from_page(current_url)
-                    # Optional: parallel post-processing of publication records (no extra network)
-                    if PARALLEL_PARSE and publications:
-                        def _identity(pub):
-                            return pub
-                        try:
-                            with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as executor:
-                                futures = [executor.submit(_identity, pub) for pub in publications]
-                                publications = [f.result() for f in as_completed(futures)]
-                        except Exception as e:
-                            logger.debug(f"Parallel parse post-process failed, continuing sequentially: {e}")
-                    self.all_publications.extend(publications)
                     
-                    # Send publications to API
                     if publications:
-                        _api_t0 = _time.perf_counter()
-                        api_success = send_to_api(publications)
-                        _api_t1 = _time.perf_counter()
-                        logger.info(f"API post time: {(_api_t1 - _api_t0):.2f}s for {len(publications)} records")
-                        if not api_success:
-                            logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
+                        # Process publications: check cache and crawl details for new ones
+                        processed_publications = self.process_publications_with_details(publications)
+                        
+                        # Optional: parallel post-processing of publication records (no extra network)
+                        if PARALLEL_PARSE and processed_publications:
+                            def _identity(pub):
+                                return pub
+                            try:
+                                with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as executor:
+                                    futures = [executor.submit(_identity, pub) for pub in processed_publications]
+                                    processed_publications = [f.result() for f in as_completed(futures)]
+                            except Exception as e:
+                                logger.debug(f"Parallel parse post-process failed, continuing sequentially: {e}")
+                        
+                        self.all_publications.extend(processed_publications)
+                        
+                        # Send publications to API
+                        if processed_publications:
+                            _api_t0 = _time.perf_counter()
+                            api_success = send_to_api(processed_publications)
+                            _api_t1 = _time.perf_counter()
+                            logger.info(f"API post time: {(_api_t1 - _api_t0):.2f}s for {len(processed_publications)} records")
+                            if not api_success:
+                                logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
                     
                     # Get next page URL
                     current_url = self.get_next_page_url()

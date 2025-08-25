@@ -345,3 +345,225 @@ class PublicationParser:
         
         logger.warning("Page does not appear to be a valid publications page")
         return False
+    
+    def parse_publication_detail(self, html_content: str, publication_url: str, basic_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Parse a detailed publication page to extract abstract and detailed authors.
+        
+        Args:
+            html_content: Raw HTML content of the publication detail page
+            publication_url: URL of the publication detail page
+            basic_data: Basic publication data from the listing page
+            
+        Returns:
+            Enhanced publication data with abstract and detailed authors
+        """
+        import time
+        
+        title = basic_data.get('title', 'Unknown')
+        parse_start_time = time.perf_counter()
+        
+        try:
+            logger.info(f"Parsing detail page for: {title}")
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Start with the basic data
+            enhanced_data = basic_data.copy()
+            
+            # Extract abstract
+            logger.info("Extracting abstract from detail page...")
+            abstract_start_time = time.perf_counter()
+            abstract = self._extract_abstract(soup)
+            abstract_end_time = time.perf_counter()
+            abstract_extract_time = abstract_end_time - abstract_start_time
+            
+            if abstract:
+                enhanced_data["abstract"] = abstract
+                logger.info(f"Abstract extracted successfully in {abstract_extract_time:.3f}s ({len(abstract)} characters)")
+                logger.debug(f"Abstract preview: {abstract[:100]}..." if len(abstract) > 100 else f"Abstract: {abstract}")
+            else:
+                enhanced_data["abstract"] = ""
+                logger.warning(f"No abstract found in detail page (search took {abstract_extract_time:.3f}s)")
+            
+            # Extract detailed authors (replace the basic authors)
+            logger.info("Extracting detailed authors from detail page...")
+            authors_start_time = time.perf_counter()
+            detailed_authors, detailed_author_links = self._extract_detailed_authors(soup)
+            authors_end_time = time.perf_counter()
+            authors_extract_time = authors_end_time - authors_start_time
+            
+            if detailed_authors:
+                enhanced_data["authors"] = format_authors(detailed_authors)
+                enhanced_data["author_links"] = format_author_links(detailed_author_links)
+                logger.info(f"Detailed authors extracted successfully in {authors_extract_time:.3f}s")
+                logger.info(f"Found {len(detailed_authors)} authors: {', '.join(detailed_authors[:3])}{'...' if len(detailed_authors) > 3 else ''}")
+                logger.info(f"Author links found: {len(detailed_author_links)}")
+            else:
+                logger.info(f"No detailed authors found, keeping original authors (search took {authors_extract_time:.3f}s)")
+            
+            parse_end_time = time.perf_counter()
+            total_parse_time = parse_end_time - parse_start_time
+            
+            logger.info(f"Detail page parsing completed in {total_parse_time:.3f}s total")
+            logger.info(f"Enhanced data summary - Abstract: {'✓' if enhanced_data.get('abstract') else '✗'}, Authors: {enhanced_data.get('authors', 'N/A')}")
+            
+            return enhanced_data
+            
+        except Exception as e:
+            parse_end_time = time.perf_counter()
+            total_parse_time = parse_end_time - parse_start_time
+            logger.error(f"Error parsing publication detail page {publication_url} after {total_parse_time:.3f}s: {e}")
+            logger.error(f"Returning basic data for: {title}")
+            # Return original data if detail parsing fails
+            return basic_data
+    
+    def _extract_abstract(self, soup: BeautifulSoup) -> str:
+        """
+        Extract abstract from publication detail page.
+        
+        Args:
+            soup: BeautifulSoup object of the publication detail page
+            
+        Returns:
+            Abstract text or empty string if not found
+        """
+        try:
+            # Common selectors for abstract sections
+            abstract_selectors = [
+                "div.textblock",  # Common abstract container
+                "div.abstract",
+                ".abstract-content",
+                "div[class*='abstract']",
+                "section[class*='abstract']",
+                "div.rendering_researchoutput_abstract",
+                "div.rendering.researchoutput.abstract",
+                "div.rendering_abstractportal",
+                "div.rendering_abstract",
+                ".rendering_researchoutput_abstractportal",
+                "div.textblock p",  # Sometimes abstract is in textblock paragraphs
+            ]
+            
+            for selector in abstract_selectors:
+                abstract_elements = soup.select(selector)
+                for element in abstract_elements:
+                    # Check if this element contains abstract-like content
+                    text = clean_text(element.get_text())
+                    if text and len(text) > 50:  # Abstract should be substantial
+                        # Check for common abstract indicators
+                        text_lower = text.lower()
+                        if any(indicator in text_lower for indicator in ['abstract', 'summary', 'background', 'objective', 'method', 'result', 'conclusion']):
+                            logger.info(f"Found abstract using selector: {selector} (with keywords)")
+                            return text
+                        # If text is long enough, it might be an abstract without explicit markers
+                        elif len(text) > 100:
+                            logger.info(f"Found potential abstract using selector: {selector} (by length)")
+                            return text
+            
+            # Fallback: look for any substantial text block that might be an abstract
+            text_blocks = soup.find_all(['p', 'div'], string=True)
+            for block in text_blocks:
+                text = clean_text(block.get_text())
+                if text and len(text) > 200:  # Longer text blocks might be abstracts
+                    parent_class = block.get('class', [])
+                    parent_class_str = ' '.join(parent_class) if parent_class else ''
+                    if 'abstract' in parent_class_str.lower():
+                        logger.debug("Found abstract in text block with abstract class")
+                        return text
+            
+            logger.debug("No abstract found in publication detail page")
+            return ""
+            
+        except Exception as e:
+            logger.error(f"Error extracting abstract: {e}")
+            return ""
+    
+    def _extract_detailed_authors(self, soup: BeautifulSoup) -> tuple[List[str], List[str]]:
+        """
+        Extract detailed author information from publication detail page.
+        
+        Args:
+            soup: BeautifulSoup object of the publication detail page
+            
+        Returns:
+            Tuple of (author_names, author_links)
+        """
+        try:
+            authors = []
+            author_links = []
+            
+            # Common selectors for author sections in detail pages
+            author_selectors = [
+                "div.persons a.person",  # Common author links
+                "div.rendering.person a",
+                "span.rendering.person a",
+                "div.person-name a",
+                "a.person-link",
+                "div[class*='author'] a",
+                "div[class*='person'] a",
+                "ul.persons li a",
+                "div.contributors a",
+                "div.author-list a",
+                ".rendering_person a",
+                "div.rendering_researchoutput_persons a",
+                "div.persons div.rendering a"
+            ]
+            
+            for selector in author_selectors:
+                author_elements = soup.select(selector)
+                if author_elements:
+                    logger.info(f"Found {len(author_elements)} author elements using selector: {selector}")
+                    for author_elem in author_elements:
+                        author_name = clean_text(author_elem.get_text())
+                        if author_name and author_name not in authors:
+                            authors.append(author_name)
+                            
+                            # Extract author link
+                            author_link = author_elem.get('href', '')
+                            if author_link and not author_link.startswith('http'):
+                                author_link = BASE_URL + author_link
+                            if validate_url(author_link) and author_link not in author_links:
+                                author_links.append(author_link)
+                    
+                    if authors:  # If we found authors with this selector, use them
+                        break
+            
+            # Fallback: look for author names without links
+            if not authors:
+                fallback_selectors = [
+                    "div.persons",
+                    "div.rendering.person",
+                    "span.rendering.person",
+                    "div[class*='author']",
+                    "div[class*='person']",
+                    "div.contributors"
+                ]
+                
+                for selector in fallback_selectors:
+                    author_containers = soup.select(selector)
+                    for container in author_containers:
+                        text = clean_text(container.get_text())
+                        if text and len(text) < 200:  # Avoid long text blocks
+                            # Try to split by common separators
+                            potential_authors = []
+                            for separator in [',', ';', '&', ' and ']:
+                                if separator in text:
+                                    potential_authors = [clean_text(name.strip()) for name in text.split(separator)]
+                                    break
+                            
+                            if not potential_authors and text:
+                                potential_authors = [text]
+                            
+                            # Filter and add valid author names
+                            for name in potential_authors:
+                                if name and len(name) > 2 and name not in authors:
+                                    authors.append(name)
+                    
+                    if authors:
+                        break
+            
+            logger.debug(f"Extracted {len(authors)} detailed authors")
+            return authors, author_links
+            
+        except Exception as e:
+            logger.error(f"Error extracting detailed authors: {e}")
+            return [], []
