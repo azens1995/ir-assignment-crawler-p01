@@ -3,6 +3,7 @@ Main crawler implementation using Selenium for Coventry University research publ
 """
 
 import time
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -15,7 +16,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from loguru import logger
 
 from src.parser import PublicationParser
-from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics, save_to_csv, fetch_text_via_selenium
+from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics, save_to_csv, fetch_text_via_selenium, fetch_existing_publication_ids
 from config.settings import (
     SEED_URL, DELAY_BETWEEN_PAGES, DELAY_BETWEEN_REQUESTS, 
     MAX_RETRIES, TIMEOUT, USER_AGENT, HEADLESS, WINDOW_SIZE,
@@ -439,22 +440,87 @@ class CoventryPublicationsCrawler:
     
     def run(self):
         """Main method to run the complete crawling process."""
+        start_time = datetime.now()
+        start_timestamp = start_time.strftime("%Y-%m-%d %H:%M:%S")
+        
         try:
-            logger.info("Starting Coventry University Publications Crawler")
+            logger.info("=" * 60)
+            logger.info("STARTING COVENTRY UNIVERSITY PUBLICATIONS CRAWLER")
+            logger.info("=" * 60)
+            logger.info(f"Start Time: {start_timestamp}")
+            
+            # Initialize publication ID cache
+            logger.info("Initializing publication ID cache...")
+            cache_start = time.perf_counter()
+            fetch_existing_publication_ids()
+            cache_end = time.perf_counter()
+            logger.info(f"Cache initialization completed in {cache_end - cache_start:.2f} seconds")
             
             # Setup WebDriver
+            logger.info("Setting up WebDriver...")
+            driver_start = time.perf_counter()
             self.setup_driver()
+            driver_end = time.perf_counter()
+            logger.info(f"WebDriver setup completed in {driver_end - driver_start:.2f} seconds")
             
             # Crawl all pages
+            logger.info("Starting page crawling...")
+            crawl_start = time.perf_counter()
             self.crawl_all_pages()
+            crawl_end = time.perf_counter()
+            logger.info(f"Page crawling completed in {crawl_end - crawl_start:.2f} seconds")
             
             # Save results
+            logger.info("Saving results...")
+            save_start = time.perf_counter()
             self.save_results()
+            save_end = time.perf_counter()
+            logger.info(f"Results saving completed in {save_end - save_start:.2f} seconds")
             
-            logger.info("Crawling process completed successfully")
+            # Calculate total time
+            end_time = datetime.now()
+            end_timestamp = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            total_duration = end_time - start_time
+            
+            logger.info("=" * 60)
+            logger.info("CRAWLING PROCESS COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            logger.info(f"End Time: {end_timestamp}")
+            logger.info(f"Total Duration: {total_duration}")
+            logger.info(f"Total Duration (seconds): {total_duration.total_seconds():.2f}")
+            
+            # Print summary to console
+            print(f"\n{'='*60}")
+            print(f"CRAWLING COMPLETED SUCCESSFULLY")
+            print(f"{'='*60}")
+            print(f"Start Time: {start_timestamp}")
+            print(f"End Time: {end_timestamp}")
+            print(f"Total Duration: {total_duration}")
+            print(f"Total Duration (seconds): {total_duration.total_seconds():.2f}")
+            print(f"{'='*60}")
             
         except Exception as e:
-            logger.error(f"Crawling process failed: {e}")
+            end_time = datetime.now()
+            end_timestamp = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            total_duration = end_time - start_time
+            
+            logger.error("=" * 60)
+            logger.error("CRAWLING PROCESS FAILED")
+            logger.error("=" * 60)
+            logger.error(f"End Time: {end_timestamp}")
+            logger.error(f"Duration before failure: {total_duration}")
+            logger.error(f"Error: {e}")
+            logger.error("=" * 60)
+            
+            print(f"\n{'='*60}")
+            print(f"CRAWLING FAILED")
+            print(f"{'='*60}")
+            print(f"Start Time: {start_timestamp}")
+            print(f"End Time: {end_timestamp}")
+            print(f"Duration before failure: {total_duration}")
+            print(f"Error: {e}")
+            print(f"{'='*60}")
+            
             raise
         
         finally:

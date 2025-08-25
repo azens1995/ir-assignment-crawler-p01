@@ -10,7 +10,104 @@ from loguru import logger
 import pandas as pd
 import sys
 
-from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_TIMEOUT, API_RETRIES
+from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_IDS_ENDPOINT, API_TIMEOUT, API_RETRIES
+
+# Global cache for existing publication IDs
+_existing_publication_ids: set = set()
+_cache_initialized: bool = False
+
+
+def encode_title_to_base64(title: str) -> str:
+    """Convert publication title to base64 encoded string."""
+    import base64
+    if not title:
+        return ""
+    # Encode title to bytes, then to base64
+    title_bytes = title.encode('utf-8')
+    encoded = base64.b64encode(title_bytes)
+    return encoded.decode('utf-8')
+
+
+def fetch_existing_publication_ids() -> set:
+    """Fetch all existing publication IDs from the API and cache them."""
+    global _existing_publication_ids, _cache_initialized
+    
+    if _cache_initialized:
+        return _existing_publication_ids
+    
+    try:
+        logger.info("Fetching existing publication IDs from API...")
+        
+        response = requests.get(
+            API_IDS_ENDPOINT,
+            timeout=API_TIMEOUT,
+            headers={
+                'Content-Type': 'application/json',
+                'User-Agent': 'Coventry-Crawler/1.0'
+            }
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            ids = data.get('ids', [])
+            _existing_publication_ids = set(ids)
+            _cache_initialized = True
+            logger.info(f"Successfully cached {len(_existing_publication_ids)} existing publication IDs")
+            return _existing_publication_ids
+        else:
+            logger.warning(f"Failed to fetch publication IDs. Status code: {response.status_code}")
+            _cache_initialized = True  # Mark as initialized to avoid repeated failed calls
+            return set()
+            
+    except requests.exceptions.Timeout:
+        logger.error("Timeout while fetching publication IDs")
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error while fetching publication IDs")
+    except Exception as e:
+        logger.error(f"Error fetching publication IDs: {e}")
+    
+    _cache_initialized = True  # Mark as initialized to avoid repeated failed calls
+    return set()
+
+
+def is_publication_exists(title: str) -> bool:
+    """Check if a publication with the given title already exists in the cache."""
+    if not title:
+        return False
+    
+    # Ensure cache is initialized
+    if not _cache_initialized:
+        fetch_existing_publication_ids()
+    
+    # Encode title to base64 and check if it exists
+    encoded_title = encode_title_to_base64(title)
+    return encoded_title in _existing_publication_ids
+
+
+def filter_existing_publications(publications: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out publications that already exist in the database."""
+    if not publications:
+        return []
+    
+    # Ensure cache is initialized
+    if not _cache_initialized:
+        fetch_existing_publication_ids()
+    
+    new_publications = []
+    skipped_count = 0
+    
+    for publication in publications:
+        title = publication.get('title', '')
+        if title and is_publication_exists(title):
+            logger.info(f"Skipping existing publication: {title}")
+            skipped_count += 1
+        else:
+            new_publications.append(publication)
+    
+    if skipped_count > 0:
+        logger.info(f"Filtered out {skipped_count} existing publications, {len(new_publications)} new publications remain")
+    
+    return new_publications
 
 
 def setup_logging():
@@ -47,14 +144,21 @@ def delay(seconds: float):
 
 
 def send_to_api(data: List[Dict[str, Any]]) -> bool:
-    """Send extracted data to API endpoint (excluding page_number field)."""
+    """Send extracted data to API endpoint (excluding page_number field and existing publications)."""
     if not data:
         logger.warning("No data to send to API")
         return False
     
+    # Filter out existing publications using the cache
+    filtered_data = filter_existing_publications(data)
+    
+    if not filtered_data:
+        logger.info("All publications already exist in database, skipping API call")
+        return True
+    
     # Exclude page_number from each publication for API submission
     publications = []
-    for item in data:
+    for item in filtered_data:
         try:
             filtered = {k: v for k, v in item.items() if k != "page_number"}
             publications.append(filtered)

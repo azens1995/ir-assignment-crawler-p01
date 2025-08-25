@@ -28,6 +28,7 @@ LOG_FILE = LOG_DIR / "crawler.log"
 
 # API Configuration
 API_ENDPOINT = "https://api.irapi.workers.dev/api/publications"
+API_IDS_ENDPOINT = "https://api.irapi.workers.dev/api/publications/ids"
 API_TIMEOUT = 30  # seconds
 API_RETRIES = 3
 
