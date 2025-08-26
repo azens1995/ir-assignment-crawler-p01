@@ -163,15 +163,22 @@ class PublicationParser:
                 if match:
                     year = match.group(1)
             
-            # Validate year before creating publication data
-            if not year or not year.isdigit():
-                logger.warning(f"Publication missing valid year: '{year}', skipping")
-                return None
-            
-            year_int = int(year)
-            if year_int < 1900 or year_int > 2030:
-                logger.warning(f"Publication year {year_int} out of valid range (1900-2030), skipping")
-                return None
+            # Tolerate missing or out-of-range year; set to 0 so publication is not dropped
+            year_int = 0
+            try:
+                if year and year.isdigit():
+                    y = int(year)
+                    if 1900 <= y <= 2030:
+                        year_int = y
+                    else:
+                        logger.warning(f"Publication year {y} out of range; coercing to 0")
+                else:
+                    if not year:
+                        logger.warning("Publication missing year; coercing to 0")
+                    else:
+                        logger.warning(f"Publication has non-numeric year '{year}'; coercing to 0")
+            except Exception as e:
+                logger.debug(f"Year parse error '{year}': {e}; coercing to 0")
             
             # Validate publication link
             if not publication_link or not publication_link.startswith('http'):
@@ -222,9 +229,10 @@ class PublicationParser:
                 # Extract the last number before "Next"
                 match = re.search(r'(\d+)\.\.(\d+).*Next', nav_text)
                 if match:
-                    last_page = int(match.group(2))
-                    total_pages = last_page + 1  # +1 because pages are 0-indexed
-                    logger.info(f"Found {total_pages} total pages from navigation pattern")
+                    last_page_number = int(match.group(2))
+                    # UI shows 1-indexed numbers; total pages equals the last visible number
+                    total_pages = last_page_number
+                    logger.info(f"Found {total_pages} total pages from navigation pattern (1-indexed UI)")
                     return total_pages
                 
                 # Fallback: look for any numbers and take the highest
@@ -236,8 +244,8 @@ class PublicationParser:
                         # Filter out obviously wrong numbers (like 123456789)
                         valid_pages = [num for num in page_nums if num <= 100]  # Reasonable page limit
                         if valid_pages:
-                            total_pages = max(valid_pages) + 1  # +1 because pages are 0-indexed
-                            logger.info(f"Found {total_pages} total pages from navigation")
+                            total_pages = max(valid_pages)  # UI is 1-indexed
+                            logger.info(f"Found {total_pages} total pages from navigation (1-indexed UI)")
                             return total_pages
         
         # Fallback: look for pagination elements
@@ -262,8 +270,8 @@ class PublicationParser:
                 continue
         
         if page_numbers:
-            total_pages = max(page_numbers) + 1  # +1 because pages are 0-indexed
-            logger.info(f"Found {total_pages} total pages")
+            total_pages = max(page_numbers)  # UI is 1-indexed
+            logger.info(f"Found {total_pages} total pages (1-indexed UI)")
             return total_pages
         
         logger.warning("Could not determine total pages, assuming 1")

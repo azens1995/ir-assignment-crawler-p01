@@ -49,6 +49,19 @@ class CoventryPublicationsCrawler:
         # Always fetch robots.txt from the site's base URL
         self.robots = RobotsPolicy(ROBOTS_URL, ROBOTS_USER_AGENT)
         
+    def _normalize_query_url(self, url: str) -> str:
+        """Ensure no trailing slash before a query string (…/path?page=1, not …/path/?page=1)."""
+        try:
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(url)
+            path = parsed.path
+            if parsed.query and path.endswith('/'):
+                path = path.rstrip('/')
+            return urlunparse(parsed._replace(path=path))
+        except Exception:
+            # Fallback simple normalization
+            return url.replace('/?', '?')
+
     def setup_driver(self):
         """Setup Chrome WebDriver with appropriate options."""
         try:
@@ -298,7 +311,7 @@ class CoventryPublicationsCrawler:
             logger.error(f"Error getting next page URL: {e}")
             return None
     
-    def process_publications_with_details(self, publications: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def process_publications_with_details(self, publications: List[Dict[str, Any]], current_page_number: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Process publications: check cache and crawl details for new ones.
         
@@ -372,6 +385,8 @@ class CoventryPublicationsCrawler:
         logger.info("=" * 60)
         logger.info("PUBLICATION PROCESSING SUMMARY")
         logger.info("=" * 60)
+        if current_page_number is not None:
+            logger.info(f"Page Number: {current_page_number}")
         logger.info(f"Total publications processed: {len(publications)}")
         logger.info(f"Existing publications skipped: {skipped_count}")
         logger.info(f"New publications found: {len(processed_publications)}")
@@ -541,7 +556,9 @@ class CoventryPublicationsCrawler:
             logger.info("Starting to crawl all publication pages")
             
             # Start with seed URL
-            current_url = SEED_URL
+            current_url = self._normalize_query_url(SEED_URL)
+            total_pages: Optional[int] = None
+            total_pages_logged: bool = False
             # One-time robots fetch
             self._ensure_robots_loaded()
             
@@ -553,11 +570,28 @@ class CoventryPublicationsCrawler:
                     # Respect robots disallow for this URL
                     if not self._respect_robots_or_skip(current_url):
                         logger.warning(f"Skipping disallowed URL by robots: {current_url}")
-                        current_url = self.get_next_page_url()
+                        # If disallowed, increment page index deterministically to continue iteration
+                        try:
+                            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                            from src.utils import get_page_number_from_url
+                            idx = get_page_number_from_url(current_url)
+                            next_idx = idx + 1
+                            if total_pages is not None and next_idx >= total_pages:
+                                current_url = None
+                            else:
+                                parsed = urlparse(current_url)
+                                query = parse_qs(parsed.query)
+                                query['page'] = [str(next_idx)]
+                                new_query = urlencode({k: v[0] for k, v in query.items()})
+                                current_url = urlunparse(parsed._replace(query=new_query))
+                        except Exception:
+                            current_url = None
                         self.current_page += 1
                         continue
                     
                     # Navigate to current listing page
+                    # Always navigate using normalized URL
+                    current_url = self._normalize_query_url(current_url)
                     if not self.navigate_to_page(current_url):
                         self.consecutive_errors += 1
                         logger.error(f"Failed to navigate to page {self.current_page + 1}")
@@ -566,34 +600,31 @@ class CoventryPublicationsCrawler:
                             logger.error(f"Too many consecutive errors ({self.consecutive_errors}), stopping crawler")
                             break
                         
-                        # Try to get next page URL anyway
-                        current_url = self.get_next_page_url()
+                        # Move to the next page deterministically without touching Selenium state
+                        try:
+                            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                            from src.utils import get_page_number_from_url
+                            idx = get_page_number_from_url(current_url)
+                            next_idx = idx + 1
+                            if total_pages is not None and next_idx >= total_pages:
+                                current_url = None
+                            else:
+                                parsed = urlparse(current_url)
+                                query = parse_qs(parsed.query)
+                                query['page'] = [str(next_idx)]
+                                new_query = urlencode({k: v[0] for k, v in query.items()})
+                                current_url = self._normalize_query_url(urlunparse(parsed._replace(query=new_query)))
+                        except Exception:
+                            current_url = None
                         self.current_page += 1
                         continue
                     
-                    # Capture listing page source and pre-compute next page URL BEFORE visiting details
-                    try:
-                        listing_page_source = self.driver.page_source if self.driver else ""
-                    except Exception:
-                        listing_page_source = ""
-                    next_url = None
-                    try:
-                        if listing_page_source:
-                            candidate_next = self.parser.get_next_page_url(listing_page_source, current_url)
-                            if candidate_next:
-                                if self._respect_robots_or_skip(candidate_next):
-                                    next_url = candidate_next
-                                else:
-                                    logger.warning("Next page blocked by robots.txt; will stop after this page")
-                    except Exception as e:
-                        logger.debug(f"Failed to compute next page from listing source: {e}")
-
                     # Extract publications from current page
                     publications = self.extract_publications_from_page(current_url)
                     
                     if publications:
                         # Process publications: check cache and crawl details for new ones
-                        processed_publications = self.process_publications_with_details(publications)
+                        processed_publications = self.process_publications_with_details(publications, current_page_number=self.current_page)
                         
                         # Optional: parallel post-processing of publication records (no extra network)
                         if PARALLEL_PARSE and processed_publications:
@@ -617,11 +648,39 @@ class CoventryPublicationsCrawler:
                             if not api_success:
                                 logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
                     
-                    # Advance to next page URL computed from the original listing page
-                    if next_url:
-                        logger.info(f"Advancing to precomputed next page: {next_url}")
-                        current_url = next_url
-                    else:
+                    # After finishing this page, determine total pages once (from DOM) and iterate deterministically
+                    try:
+                        if total_pages is None and self.driver is not None:
+                            page_source_for_pagination = self.driver.page_source
+                            detected_total = self.parser.get_total_pages(page_source_for_pagination)
+                            # Parser returns total pages in 1-indexed UI terms; convert to 0-indexed last index
+                            if detected_total and detected_total > 0:
+                                total_pages = detected_total  # keep as count
+                                if not total_pages_logged:
+                                    logger.info(f"Total pages detected on first crawl: {detected_total}")
+                                    total_pages_logged = True
+                                logger.info(f"Detected pagination range: first=0, last={detected_total - 1} (total {detected_total} pages)")
+                    except Exception as e:
+                        logger.debug(f"Failed to detect total pages: {e}")
+
+                    # Compute next index and construct next URL
+                    try:
+                        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                        from src.utils import get_page_number_from_url
+                        current_index = get_page_number_from_url(current_url)
+                        next_index = current_index + 1
+                        if total_pages is not None and next_index >= total_pages:
+                            logger.info(f"Reached last page index {current_index}; stopping crawl")
+                            current_url = None
+                        else:
+                            parsed = urlparse(current_url)
+                            query = parse_qs(parsed.query)
+                            query['page'] = [str(next_index)]
+                            new_query = urlencode({k: v[0] for k, v in query.items()})
+                            current_url = self._normalize_query_url(urlunparse(parsed._replace(query=new_query)))
+                            logger.info(f"Advancing to page index {next_index}: {current_url}")
+                    except Exception as e:
+                        logger.warning(f"Failed to construct next page URL deterministically: {e}")
                         current_url = None
                     self.current_page += 1
                     
@@ -633,8 +692,22 @@ class CoventryPublicationsCrawler:
                         logger.error(f"Too many consecutive errors ({self.consecutive_errors}), stopping crawler")
                         break
                     
-                    # Try to continue with next page
-                    current_url = self.get_next_page_url()
+                    # Try to continue with next page by incrementing page index
+                    try:
+                        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+                        from src.utils import get_page_number_from_url
+                        idx = get_page_number_from_url(current_url) if current_url else self.current_page
+                        next_idx = idx + 1
+                        if total_pages is not None and next_idx >= total_pages:
+                            current_url = None
+                        else:
+                            parsed = urlparse(current_url) if current_url else urlparse(self._normalize_query_url(SEED_URL))
+                            query = parse_qs(parsed.query)
+                            query['page'] = [str(next_idx)]
+                            new_query = urlencode({k: v[0] for k, v in query.items()})
+                            current_url = self._normalize_query_url(urlunparse(parsed._replace(query=new_query)))
+                    except Exception:
+                        current_url = None
                     self.current_page += 1
                     continue
             
