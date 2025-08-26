@@ -31,6 +31,8 @@ API_ENDPOINT = "https://api.irapi.workers.dev/api/publications"
 API_IDS_ENDPOINT = "https://api.irapi.workers.dev/api/publications/ids"
 API_TIMEOUT = 30  # seconds
 API_RETRIES = 3
+# Test mode: post each detailed record immediately and log payload
+API_POST_EACH_DETAIL = False
 
 # Ensure directories exist
 LOG_DIR.mkdir(exist_ok=True)

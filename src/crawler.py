@@ -16,12 +16,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 from loguru import logger
 
 from src.parser import PublicationParser
-from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics, save_to_csv, fetch_text_via_selenium, fetch_existing_publication_ids
+from src.utils import delay, send_to_api, create_backup_file, get_crawling_statistics, save_to_csv, fetch_text_via_selenium, fetch_existing_publication_ids, send_single_to_api
 from config.settings import (
     SEED_URL, DELAY_BETWEEN_PAGES, DELAY_BETWEEN_REQUESTS, 
     MAX_RETRIES, TIMEOUT, USER_AGENT, HEADLESS, WINDOW_SIZE,
     MAX_CONSECUTIVE_ERRORS, ERROR_DELAY, DATA_DIR, PARALLEL_PARSE, PARSE_WORKERS
 )
+from config.settings import API_POST_EACH_DETAIL
 
 # robots
 from src.utils import RobotsPolicy
@@ -346,6 +347,16 @@ class CoventryPublicationsCrawler:
                 if enhanced_publication:
                     processed_publications.append(enhanced_publication)
                     logger.info(f"Successfully enhanced publication details in {detail_crawl_time:.2f}s: {title}")
+                    # Test mode: send each detailed record to API immediately
+                    if API_POST_EACH_DETAIL:
+                        try:
+                            logger.info("Posting single enhanced publication to API (test mode)...")
+                            _api_t0 = _time.perf_counter()
+                            send_single_to_api(enhanced_publication)
+                            _api_t1 = _time.perf_counter()
+                            logger.info(f"Single API post time: {(_api_t1 - _api_t0):.2f}s for: {title}")
+                        except Exception as e:
+                            logger.warning(f"Failed to post single enhanced publication for '{title}': {e}")
                 else:
                     # If detail crawling fails, use basic data
                     logger.warning(f"Failed to crawl details for {title}, using basic data")
@@ -580,8 +591,8 @@ class CoventryPublicationsCrawler:
                         
                         self.all_publications.extend(processed_publications)
                         
-                        # Send publications to API
-                        if processed_publications:
+                        # Send publications to API (page-batch) only if not in test single-post mode
+                        if processed_publications and not API_POST_EACH_DETAIL:
                             _api_t0 = _time.perf_counter()
                             api_success = send_to_api(processed_publications)
                             _api_t1 = _time.perf_counter()

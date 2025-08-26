@@ -10,7 +10,7 @@ from loguru import logger
 import pandas as pd
 import sys
 
-from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_IDS_ENDPOINT, API_TIMEOUT, API_RETRIES
+from config.settings import LOG_FILE, LOG_FORMAT, LOG_LEVEL, CSV_ENCODING, CSV_DELIMITER, API_ENDPOINT, API_IDS_ENDPOINT, API_TIMEOUT, API_RETRIES, API_POST_EACH_DETAIL
 
 # Global cache for existing publication IDs
 _existing_publication_ids: set = set()
@@ -152,15 +152,14 @@ def send_to_api(data: List[Dict[str, Any]]) -> bool:
     # Note: Filtering for existing publications is now done in the crawler
     # before calling this function, so we can directly process the data
     
-    # Exclude page_number from each publication for API submission
+    # Exclude page_number and normalize fields for API submission
     publications = []
     for item in data:
         try:
             filtered = {k: v for k, v in item.items() if k != "page_number"}
-            publications.append(filtered)
         except Exception:
-            # If unexpected structure, skip filtering for this item
-            publications.append(item)
+            filtered = item
+        publications.append(_normalize_publication_for_api(filtered))
     
     # Prepare payload
     payload = {
@@ -200,6 +199,85 @@ def send_to_api(data: List[Dict[str, Any]]) -> bool:
     
     logger.error(f"Failed to send data to API after {API_RETRIES} attempts")
     return False
+
+
+def send_single_to_api(publication: Dict[str, Any]) -> bool:
+    """Send a single publication to API with payload logging (excluding page_number)."""
+    if not publication:
+        logger.warning("Empty publication payload; skipping API call")
+        return False
+
+    try:
+        filtered = {k: v for k, v in publication.items() if k != "page_number"}
+    except Exception:
+        filtered = publication
+
+    normalized = _normalize_publication_for_api(filtered)
+    payload = {"publications": [normalized]}
+
+    # Log payload being sent for test visibility
+    try:
+        import json
+        logger.info(f"POST payload preview: {json.dumps(payload, ensure_ascii=False)[:1500]}" )
+    except Exception:
+        logger.debug("Failed to serialize payload preview for logging")
+
+    for attempt in range(API_RETRIES):
+        try:
+            logger.info(f"Sending single publication to API (attempt {attempt + 1}/{API_RETRIES})")
+            response = requests.post(
+                API_ENDPOINT,
+                json=payload,
+                timeout=API_TIMEOUT,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Coventry-Crawler/1.0'
+                }
+            )
+            if response.status_code == 200:
+                logger.info("Successfully sent single publication to API")
+                return True
+            else:
+                logger.warning(f"API returned status code {response.status_code}: {response.text}")
+        except requests.exceptions.Timeout:
+            logger.error(f"API request timeout on attempt {attempt + 1}")
+        except requests.exceptions.ConnectionError:
+            logger.error(f"API connection error on attempt {attempt + 1}")
+        except Exception as e:
+            logger.error(f"API request error on attempt {attempt + 1}: {e}")
+
+        if attempt < API_RETRIES - 1:
+            logger.info("Retrying API call in 5 seconds...")
+            time.sleep(5)
+
+    logger.error("Failed to send single publication to API after retries")
+    return False
+
+
+def _normalize_publication_for_api(publication: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure required keys exist and coerce None to acceptable API values.
+
+    - Adds missing keys: abstract, author_links, authors, title, publication_link
+    - Converts None for string fields to empty string
+    - Leaves numeric fields like year untouched
+    """
+    try:
+        normalized = dict(publication)
+    except Exception:
+        return publication
+
+    def _coerce_str(value: Any) -> str:
+        return "" if value is None else str(value)
+
+    # Ensure common fields exist and are not None for strings
+    for key in ["abstract", "author_links", "authors", "title", "publication_link"]:
+        if key not in normalized:
+            normalized[key] = ""
+        elif normalized[key] is None:
+            normalized[key] = ""
+
+    # Do not coerce year here; assume upstream provided int or valid value
+    return normalized
 
 
 def save_to_csv(data: List[Dict[str, Any]], output_file: Path):
