@@ -71,13 +71,20 @@ class PublicationParser:
         """
         try:
             # Extract title and publication link
-            title_element = container.select_one(self.selectors["title"])
-            if not title_element:
-                logger.warning("No title element found in publication container")
-                return None
-            
-            title = clean_text(title_element.get_text())
-            publication_link = title_element.get('href', '')
+            title_element = container.select_one(self.selectors["title"]) 
+            publication_link = ""
+            if title_element:
+                title = clean_text(title_element.get_text())
+                publication_link = title_element.get('href', '')
+            else:
+                # Fallback: try title text without link
+                header = container.select_one("h3.title")
+                if header:
+                    title = clean_text(header.get_text())
+                    logger.warning("Title link missing; using header text and leaving link empty")
+                else:
+                    logger.warning("No title element found in publication container")
+                    return None
             
             # Make publication link absolute if it's relative
             if publication_link and not publication_link.startswith('http'):
@@ -180,10 +187,10 @@ class PublicationParser:
             except Exception as e:
                 logger.debug(f"Year parse error '{year}': {e}; coercing to 0")
             
-            # Validate publication link
+            # Do not drop the record if publication_link is missing/invalid; keep basic data
             if not publication_link or not publication_link.startswith('http'):
-                logger.warning(f"Publication missing valid publication_link: '{publication_link}', skipping")
-                return None
+                logger.warning(f"Publication has no valid detail link; keeping basic data. link='{publication_link}'")
+                publication_link = ""
             
             # Create publication data dictionary
             publication_data = {

@@ -44,6 +44,7 @@ class CoventryPublicationsCrawler:
         self.all_publications: List[Dict[str, Any]] = []
         self.consecutive_errors = 0
         self.current_page = 0
+        self.skipped_records: List[Dict[str, Any]] = []  # Keep track of skipped publications and reasons
         # Dev-mode CSV saving flag
         self.save_csv_flag = save_csv
         # Always fetch robots.txt from the site's base URL
@@ -339,12 +340,32 @@ class CoventryPublicationsCrawler:
             
             if not title:
                 logger.warning("Skipping publication with no title")
+                try:
+                    self.skipped_records.append({
+                        "reason": "missing_title",
+                        "page_number": self.current_page,
+                        "index_on_page": i + 1,
+                        "title": title or "",
+                        "publication_link": publication.get('publication_link', '') or ""
+                    })
+                except Exception:
+                    pass
                 continue
             
             # Check if publication already exists
             if is_publication_exists(title):
                 logger.info(f"Skipping existing publication: {title}")
                 skipped_count += 1
+                try:
+                    self.skipped_records.append({
+                        "reason": "already_exists",
+                        "page_number": self.current_page,
+                        "index_on_page": i + 1,
+                        "title": title,
+                        "publication_link": publication_url or ""
+                    })
+                except Exception:
+                    pass
                 continue
             
             # Publication is new - crawl details
@@ -646,7 +667,28 @@ class CoventryPublicationsCrawler:
                             _api_t1 = _time.perf_counter()
                             logger.info(f"API post time: {(_api_t1 - _api_t0):.2f}s for {len(processed_publications)} records")
                             if not api_success:
-                                logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
+                                logger.warning(f"Failed to send publications from page {self.current_page + 1} to API; attempting per-item retry with logging")
+                                # Retry individually and log failures as skipped
+                                for idx, pub in enumerate(processed_publications, start=1):
+                                    try:
+                                        single_ok = send_single_to_api(pub)
+                                        if not single_ok:
+                                            self.skipped_records.append({
+                                                "reason": "api_send_failed",
+                                                "page_number": self.current_page,
+                                                "index_on_page": idx,
+                                                "title": pub.get('title', ''),
+                                                "publication_link": pub.get('publication_link', '') or ""
+                                            })
+                                    except Exception as e:
+                                        logger.debug(f"Per-item API send raised exception: {e}")
+                                        self.skipped_records.append({
+                                            "reason": "api_send_exception",
+                                            "page_number": self.current_page,
+                                            "index_on_page": idx,
+                                            "title": pub.get('title', ''),
+                                            "publication_link": pub.get('publication_link', '') or ""
+                                        })
                     
                     # After finishing this page, determine total pages once (from DOM) and iterate deterministically
                     try:
@@ -728,6 +770,23 @@ class CoventryPublicationsCrawler:
             logger.info(f"  Unique Authors: {stats['unique_authors']}")
             logger.info(f"  Year Range: {stats['year_range']}")
             logger.info(f"  Pages Crawled: {stats['pages_crawled']}")
+            # Log skipped publications summary
+            try:
+                total_skipped = len(self.skipped_records)
+                logger.info(f"  Publications Skipped (not recorded): {total_skipped}")
+                if total_skipped > 0:
+                    logger.info("  Skipped Publications Detail (up to first 20 shown):")
+                    for rec in self.skipped_records[:20]:
+                        logger.info(f"    - Page {rec.get('page_number')} idx {rec.get('index_on_page')}: '{rec.get('title','')}' reason={rec.get('reason')} link={rec.get('publication_link','')}")
+                    # If there are more skipped, show a short summary count by reason
+                    if total_skipped > 20:
+                        reason_counts = {}
+                        for rec in self.skipped_records:
+                            reason = rec.get('reason', 'unknown')
+                            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                        logger.info("  Skipped counts by reason: " + ", ".join(f"{k}={v}" for k, v in reason_counts.items()))
+            except Exception:
+                logger.debug("Failed to render skipped publications summary")
             
             # Save to CSV in data directory only if dev flag is enabled
             if self.save_csv_flag and self.all_publications:
