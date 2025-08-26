@@ -3,6 +3,7 @@ HTML parsing utilities for extracting publication data.
 """
 
 from typing import List, Dict, Any, Optional
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 from bs4 import BeautifulSoup
 from loguru import logger
 
@@ -80,7 +81,8 @@ class PublicationParser:
             
             # Make publication link absolute if it's relative
             if publication_link and not publication_link.startswith('http'):
-                publication_link = BASE_URL + publication_link
+                # Use urljoin for robust relative URL handling
+                publication_link = urljoin(BASE_URL + '/', publication_link)
             
             # Extract authors and author links
             authors = []
@@ -280,7 +282,7 @@ class PublicationParser:
         """
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Look for "Next ›" link in navigation
+        # Look for "Next" link in navigation
         nav_elements = soup.find_all('nav')
         for nav in nav_elements:
             nav_text = nav.get_text().strip()
@@ -289,31 +291,33 @@ class PublicationParser:
                 for link in nav_links:
                     text = link.get_text().strip()
                     if 'Next' in text:
-                        next_url = link.get('href', '')
-                        if next_url and not next_url.startswith('http'):
-                            next_url = BASE_URL + next_url
+                        next_href = link.get('href', '')
+                        # Build absolute URL relative to current_url
+                        next_url = urljoin(current_url, next_href)
                         if not validate_url(next_url):
                             logger.warning(f"Ignoring invalid next link: {next_url}")
                             return None
                         logger.info(f"Found next page link: {next_url}")
                         return next_url
         
-        # Alternative: construct next page URL based on current page
-        current_page = get_page_number_from_url(current_url)
-        next_page = current_page + 1
-        
-        # Check if we've reached the end (based on the debug output, there are 16 pages: 0-15)
-        if current_page >= 15:  # Last page is 15 (0-indexed)
-            logger.info(f"Reached last page ({current_page}), no more pages")
+        # Alternative: construct next page URL by incrementing the page query param
+        try:
+            parsed = urlparse(current_url)
+            query = parse_qs(parsed.query)
+            current_page = int(query.get('page', ['0'])[0])
+            next_page = current_page + 1
+            query['page'] = [str(next_page)]
+            new_query = urlencode({k: v[0] for k, v in query.items()})
+            next_parsed = parsed._replace(query=new_query)
+            next_url = urlunparse(next_parsed)
+            if not validate_url(next_url):
+                logger.warning(f"Constructed invalid next URL: {next_url}")
+                return None
+            logger.info(f"Constructed next page URL: {next_url}")
+            return next_url
+        except Exception as e:
+            logger.warning(f"Failed to construct next page URL from {current_url}: {e}")
             return None
-        
-        # Construct next page URL
-        next_url = current_url.replace(f'page={current_page}', f'page={next_page}')
-        if not validate_url(next_url):
-            logger.warning(f"Constructed invalid next URL: {next_url}")
-            return None
-        logger.info(f"Constructed next page URL: {next_url}")
-        return next_url
     
     def validate_page_content(self, html_content: str) -> bool:
         """

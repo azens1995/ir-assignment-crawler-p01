@@ -557,7 +557,7 @@ class CoventryPublicationsCrawler:
                         self.current_page += 1
                         continue
                     
-                    # Navigate to current page
+                    # Navigate to current listing page
                     if not self.navigate_to_page(current_url):
                         self.consecutive_errors += 1
                         logger.error(f"Failed to navigate to page {self.current_page + 1}")
@@ -571,6 +571,23 @@ class CoventryPublicationsCrawler:
                         self.current_page += 1
                         continue
                     
+                    # Capture listing page source and pre-compute next page URL BEFORE visiting details
+                    try:
+                        listing_page_source = self.driver.page_source if self.driver else ""
+                    except Exception:
+                        listing_page_source = ""
+                    next_url = None
+                    try:
+                        if listing_page_source:
+                            candidate_next = self.parser.get_next_page_url(listing_page_source, current_url)
+                            if candidate_next:
+                                if self._respect_robots_or_skip(candidate_next):
+                                    next_url = candidate_next
+                                else:
+                                    logger.warning("Next page blocked by robots.txt; will stop after this page")
+                    except Exception as e:
+                        logger.debug(f"Failed to compute next page from listing source: {e}")
+
                     # Extract publications from current page
                     publications = self.extract_publications_from_page(current_url)
                     
@@ -600,8 +617,12 @@ class CoventryPublicationsCrawler:
                             if not api_success:
                                 logger.warning(f"Failed to send publications from page {self.current_page + 1} to API")
                     
-                    # Get next page URL
-                    current_url = self.get_next_page_url()
+                    # Advance to next page URL computed from the original listing page
+                    if next_url:
+                        logger.info(f"Advancing to precomputed next page: {next_url}")
+                        current_url = next_url
+                    else:
+                        current_url = None
                     self.current_page += 1
                     
                 except Exception as e:
